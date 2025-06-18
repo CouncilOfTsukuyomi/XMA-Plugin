@@ -40,7 +40,7 @@ jobs:
               if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
               run: |
                   mkdir -p plugin-package
-                  cp src/PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
+                  cp PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
                   cd plugin-package
                   VERSION_TAG=${{ github.ref_name }}
                   if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
