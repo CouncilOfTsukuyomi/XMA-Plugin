@@ -1,0 +1,4 @@
+[submodule "PluginManager.Core"]
+	path = PluginManager.Core
+	url = https://github.com/CouncilOfTsukuyomi/PluginManager.git
+	branch = main
