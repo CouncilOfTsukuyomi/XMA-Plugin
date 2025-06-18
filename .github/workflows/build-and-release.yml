@@ -22,6 +22,13 @@ jobs:
               with:
                   submodules: recursive
 
+            - name: Generate GitHub App Token
+              uses: actions/create-github-app-token@v1
+              id: app-token
+              with:
+                  app-id: ${{ vars.APP_ID }}
+                  private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
               with:
@@ -55,13 +62,15 @@ jobs:
                   git config --local user.name "GitHub Action"
                   git tag ${{ github.event.inputs.version }}
                   git push origin ${{ github.event.inputs.version }}
+              env:
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
             - name: Create Release
               if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
               id: create_release
               uses: actions/create-release@v1
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
               with:
                   tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
                   release_name: XMA Plugin ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
@@ -72,7 +81,7 @@ jobs:
               if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
               uses: actions/upload-release-asset@v1
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
               with:
                   upload_url: ${{ steps.create_release.outputs.upload_url }}
                   asset_path: ./XMAPlugin-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}.zip
