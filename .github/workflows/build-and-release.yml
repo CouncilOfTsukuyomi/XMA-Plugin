@@ -34,12 +34,13 @@ jobs:
               if: startsWith(github.ref, 'refs/tags/')
               run: |
                   mkdir -p plugin-package
-                  cp src/PluginManager.Plugins.XmaMod/bin/Release/net9.0/* plugin-package/
+                  cp src/PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
                   cd plugin-package
                   zip -r ../XMAPlugin-${{ github.ref_name }}.zip .
 
             - name: Create Release
               if: startsWith(github.ref, 'refs/tags/')
+              id: create_release
               uses: actions/create-release@v1
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
