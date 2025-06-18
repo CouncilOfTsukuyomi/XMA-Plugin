@@ -18,16 +18,18 @@ jobs:
         runs-on: ubuntu-latest
         
         steps:
-            - uses: actions/checkout@v4
-              with:
-                  submodules: recursive
-
             - name: Generate GitHub App Token
               uses: actions/create-github-app-token@v1
               id: app-token
               with:
                   app-id: ${{ vars.APP_ID }}
                   private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+            - name: "⏬ Check out repository code"
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+                  token: ${{ steps.app-token.outputs.token }}
 
             - name: Setup .NET
               uses: actions/setup-dotnet@v4
@@ -55,13 +57,12 @@ jobs:
                   fi
                   zip -r ../XMAPlugin-${VERSION_TAG}.zip .
 
-            - name: Create Tag
+            - name: "🏷️ Create and Push tag"
               if: github.event_name == 'workflow_dispatch'
-              run: |
-                  git config --local user.email "action@github.com"
-                  git config --local user.name "GitHub Action"
-                  git tag ${{ github.event.inputs.version }}
-                  git push origin ${{ github.event.inputs.version }}
+              uses: EndBug/latest-tag@latest
+              with:
+                  tag-name: ${{ github.event.inputs.version }}
+                  description: "Release ${{ github.event.inputs.version }}"
               env:
                   GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
