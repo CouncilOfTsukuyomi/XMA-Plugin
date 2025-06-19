@@ -15,7 +15,7 @@ public class XmaPlugin : BaseModPlugin
     private string? _cookieValue;
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
-    private string _userAgent = "XmaModPlugin/1.0.0";
+    private string _userAgent = "XmaModPlugin/1.0.1";
     private bool _fetchDownloadLinks = true; // Option to fetch download links immediately
 
     // We store the last known cookie to detect changes between calls.
@@ -28,7 +28,7 @@ public class XmaPlugin : BaseModPlugin
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
     public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
-    public override string Version => "1.0.0";
+    public override string Version => "1.0.1";
     public override string Author => "Council of Tsukuyomi";
 
     public XmaPlugin(ILogger<XmaPlugin> logger, HttpClient? httpClient = null) 
