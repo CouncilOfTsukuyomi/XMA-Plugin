@@ -40,7 +40,7 @@ jobs:
             - name: Package Plugin
               run: |
                   mkdir -p plugin-package
-                  cp PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
+                  cp -r PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
                   cd plugin-package
                   zip -r ../XMAPlugin-${{ github.ref_name }}.zip .
 
