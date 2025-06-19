@@ -40,27 +40,26 @@ jobs:
             - name: Package Plugin
               run: |
                   # Create plugin directory structure
-                  mkdir -p plugin-package/XMAPlugin-${{ github.ref_name }}
+                  mkdir -p plugin-package
                   
                   # Publish the plugin with all dependencies
                   dotnet publish PluginManager.Plugins.XMA \
                     --configuration Release \
-                    --output plugin-package/XMAPlugin-${{ github.ref_name }} \
+                    --output plugin-package \
                     --self-contained false \
                     --no-restore
                   
                   # Ensure plugin.json is in the output
-                  if [ ! -f "plugin-package/XMAPlugin-${{ github.ref_name }}/plugin.json" ]; then
-                    cp PluginManager.Plugins.XMA/plugin.json plugin-package/XMAPlugin-${{ github.ref_name }}/
+                  if [ ! -f "plugin-package/plugin.json" ]; then
+                    cp PluginManager.Plugins.XMA/plugin.json plugin-package/
                   fi
                   
                   # Remove unnecessary files to reduce size
-                  cd plugin-package/XMAPlugin-${{ github.ref_name }}
+                  cd plugin-package
                   rm -f *.pdb *.xml *.deps.json *.runtimeconfig.json
                   
-                  # Create the zip with proper structure
-                  cd ..
-                  zip -r ../XMAPlugin-${{ github.ref_name }}.zip XMAPlugin-${{ github.ref_name }}
+                  # Create the zip directly from the plugin files
+                  zip -r ../XMAPlugin-${{ github.ref_name }}.zip .
 
             - name: Create Release
               id: create_release

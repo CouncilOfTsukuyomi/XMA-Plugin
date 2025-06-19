@@ -38,8 +38,7 @@
     <ItemGroup>
         <!-- Reference the core plugin interface -->
         <ProjectReference Include="..\PluginManager\PluginManager.Core\PluginManager.Core.csproj">
-            <Private>false</Private>
-            <ExcludeAssets>runtime</ExcludeAssets>
+            <Private>true</Private>
         </ProjectReference>
     </ItemGroup>
 

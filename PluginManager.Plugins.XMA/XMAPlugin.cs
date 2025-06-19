@@ -4,13 +4,14 @@ using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using PluginManager.Core.Interfaces;
 using PluginManager.Core.Models;
 using PluginManager.Core.Plugins;
 using PluginManager.Plugins.XMA.Models;
 
 namespace PluginManager.Plugins.XMA;
 
-public class XmaPlugin : BaseModPlugin
+public class XmaPlugin : BaseModPlugin, IModPlugin
 {
     private HttpClient? _httpClient;
     private string _baseUrl = "https://www.xivmodarchive.com";
