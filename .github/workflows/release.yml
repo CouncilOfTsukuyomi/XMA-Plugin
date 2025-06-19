@@ -39,10 +39,28 @@ jobs:
 
             - name: Package Plugin
               run: |
-                  mkdir -p plugin-package
-                  cp -r PluginManager.Plugins.XMA/bin/Release/net9.0/* plugin-package/
-                  cd plugin-package
-                  zip -r ../XMAPlugin-${{ github.ref_name }}.zip .
+                  # Create plugin directory structure
+                  mkdir -p plugin-package/XMAPlugin-${{ github.ref_name }}
+                  
+                  # Publish the plugin with all dependencies
+                  dotnet publish PluginManager.Plugins.XMA \
+                    --configuration Release \
+                    --output plugin-package/XMAPlugin-${{ github.ref_name }} \
+                    --self-contained false \
+                    --no-restore
+                  
+                  # Ensure plugin.json is in the output
+                  if [ ! -f "plugin-package/XMAPlugin-${{ github.ref_name }}/plugin.json" ]; then
+                    cp PluginManager.Plugins.XMA/plugin.json plugin-package/XMAPlugin-${{ github.ref_name }}/
+                  fi
+                  
+                  # Remove unnecessary files to reduce size
+                  cd plugin-package/XMAPlugin-${{ github.ref_name }}
+                  rm -f *.pdb *.xml *.deps.json *.runtimeconfig.json
+                  
+                  # Create the zip with proper structure
+                  cd ..
+                  zip -r ../XMAPlugin-${{ github.ref_name }}.zip XMAPlugin-${{ github.ref_name }}
 
             - name: Create Release
               id: create_release
@@ -52,6 +70,16 @@ jobs:
               with:
                   tag_name: ${{ github.ref_name }}
                   release_name: XMA Plugin ${{ github.ref_name }}
+                  body: |
+                      ## XMA Plugin ${{ github.ref_name }}
+                      
+                      ### Installation
+                      1. Download `XMAPlugin-${{ github.ref_name }}.zip`
+                      2. Extract to your `plugins/` directory
+                      3. Restart your application
+                      
+                      ### Changes
+                      See commit history for detailed changes.
                   draft: false
                   prerelease: false
 

@@ -1,7 +1,9 @@
-﻿using System.Net;
+﻿
+using System.Net;
 using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using PluginManager.Core.Models;
 using PluginManager.Core.Plugins;
 using PluginManager.Plugins.XMA.Models;
@@ -31,6 +33,13 @@ public class XmaPlugin : BaseModPlugin
     public override string Version => "1.0.1";
     public override string Author => "Council of Tsukuyomi";
 
+    // Parameterless constructor for plugin loader
+    public XmaPlugin() : base(CreateLogger())
+    {
+        InitializeHttpClient();
+    }
+
+    // Constructor with dependency injection (for testing or manual instantiation)
     public XmaPlugin(ILogger<XmaPlugin> logger, HttpClient? httpClient = null) 
         : base(logger, TimeSpan.FromMinutes(30))
     {
@@ -38,9 +47,27 @@ public class XmaPlugin : BaseModPlugin
         ConfigureHttpClient();
     }
 
+    private static ILogger CreateLogger()
+    {
+        // This creates a logger that can potentially be replaced by the plugin system
+        return NullLogger.Instance;
+    }
+
+    private void InitializeHttpClient()
+    {
+        _httpClient = new HttpClient();
+        ConfigureHttpClient();
+    }
+
+    public void SetLogger(ILogger logger)
+    {
+        // We can't change the Logger property from BaseModPlugin, but we can log this
+        LogInfo("Logger provided to XMA Plugin");
+    }
+
     public override async Task InitializeAsync(Dictionary<string, object> configuration)
     {
-        Logger.LogInformation("Initializing XIV Mod Archive plugin");
+        LogInfo("Initializing XIV Mod Archive plugin");
 
         // Load configuration
         if (configuration.TryGetValue("BaseUrl", out var baseUrl))
@@ -83,12 +110,12 @@ public class XmaPlugin : BaseModPlugin
 
         ConfigureHttpClient();
         
-        Logger.LogInformation("XIV Mod Archive plugin initialized successfully");
+        LogInfo("XIV Mod Archive plugin initialized successfully");
     }
 
     public override async Task<List<PluginMod>> GetRecentModsAsync()
     {
-        Logger.LogDebug("Getting recent mods from XIV Mod Archive");
+        LogDebug("Getting recent mods from XIV Mod Archive");
 
         // Check for cookie changes and invalidate cache if needed
         InvalidateCacheOnCookieChange();
@@ -97,11 +124,11 @@ public class XmaPlugin : BaseModPlugin
         var cachedData = LoadXmaCacheFromFile();
         if (cachedData != null && cachedData.ExpirationTime > DateTimeOffset.Now)
         {
-            Logger.LogDebug("Returning {Count} mods from XMA cache", cachedData.Mods.Count);
+            LogDebug($"Returning {cachedData.Mods.Count} mods from XMA cache");
             return cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
         }
 
-        Logger.LogDebug("XMA cache is empty or expired. Fetching new data...");
+        LogDebug("XMA cache is empty or expired. Fetching new data...");
 
         // Fetch fresh data
         var xmaMods = await FetchRecentXmaModsAsync();
@@ -123,7 +150,7 @@ public class XmaPlugin : BaseModPlugin
         // Convert to PluginMod format
         var pluginMods = xmaMods.Select(m => m.ToPluginMod(PluginId)).ToList();
 
-        Logger.LogInformation("Retrieved {Count} recent mods from XIV Mod Archive", pluginMods.Count);
+        LogInfo($"Retrieved {pluginMods.Count} recent mods from XIV Mod Archive");
         return pluginMods;
     }
 
@@ -168,12 +195,11 @@ public class XmaPlugin : BaseModPlugin
             catch (Exception ex)
             {
                 retryCount++;
-                Logger.LogWarning(ex, "Attempt {Retry}/{MaxRetries} failed to fetch mods from XIV Mod Archive", 
-                    retryCount, _maxRetries);
+                LogWarning(ex, $"Attempt {retryCount}/{_maxRetries} failed to fetch mods from XIV Mod Archive");
 
                 if (retryCount > _maxRetries)
                 {
-                    Logger.LogError(ex, "Failed to fetch mods after {MaxRetries} retries", _maxRetries);
+                    LogError(ex, $"Failed to fetch mods after {_maxRetries} retries");
                     throw;
                 }
             }
@@ -187,9 +213,8 @@ public class XmaPlugin : BaseModPlugin
     /// </summary>
     private async Task<List<XmaMods>> EnrichWithDownloadLinksAsync(List<XmaMods> mods)
     {
-        Logger.LogDebug("Enriching {Count} mods with download links", mods.Count);
+        LogDebug($"Enriching {mods.Count} mods with download links");
         
-        var enrichedMods = new List<XmaMods>();
         var semaphore = new SemaphoreSlim(3, 3); // Limit concurrent requests
 
         var tasks = mods.Select(async mod =>
@@ -241,14 +266,14 @@ public class XmaPlugin : BaseModPlugin
             var downloadNode = doc.DocumentNode.SelectSingleNode("//a[@id='mod-download-link']");
             if (downloadNode == null)
             {
-                Logger.LogWarning("No download anchor found on: {ModUrl}", modUrl);
+                LogWarning($"No download anchor found on: {modUrl}");
                 return null;
             }
 
             var hrefValue = downloadNode.GetAttributeValue("href", "");
             if (string.IsNullOrWhiteSpace(hrefValue))
             {
-                Logger.LogWarning("Download link was empty or missing on: {ModUrl}", modUrl);
+                LogWarning($"Download link was empty or missing on: {modUrl}");
                 return null;
             }
 
@@ -273,7 +298,7 @@ public class XmaPlugin : BaseModPlugin
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to parse mod download link from: {ModUrl}", modUrl);
+            LogError(ex, $"Failed to parse mod download link from: {modUrl}");
             return null;
         }
     }
@@ -297,7 +322,7 @@ public class XmaPlugin : BaseModPlugin
 
         if (modCards == null)
         {
-            Logger.LogDebug("No mod-card blocks found for page {PageNumber}.", pageNumber);
+            LogDebug($"No mod-card blocks found for page {pageNumber}.");
             return results;
         }
 
@@ -313,7 +338,7 @@ public class XmaPlugin : BaseModPlugin
             }
             catch (Exception ex)
             {
-                Logger.LogWarning(ex, "Failed to parse mod card on page {PageNumber}", pageNumber);
+                LogWarning(ex, $"Failed to parse mod card on page {pageNumber}");
             }
         }
 
@@ -378,7 +403,7 @@ public class XmaPlugin : BaseModPlugin
         // Skip mods without an image
         if (string.IsNullOrWhiteSpace(imgUrl))
         {
-            Logger.LogWarning("Skipping mod due to missing image URL, Name={Name}", normalizedName);
+            LogWarning($"Skipping mod due to missing image URL, Name={normalizedName}");
             return null;
         }
 
@@ -402,7 +427,7 @@ public class XmaPlugin : BaseModPlugin
     {
         if (_cookieValue != _lastCookieValue)
         {
-            Logger.LogDebug("Cookie changed. Invalidating cached data.");
+            LogDebug("Cookie changed. Invalidating cached data.");
 
             // Remove XMA-specific cache file
             if (File.Exists(_xmaCacheFilePath))
@@ -413,7 +438,7 @@ public class XmaPlugin : BaseModPlugin
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogError(ex, "Failed to delete old XMA cache file while invalidating cache.");
+                    LogError(ex, "Failed to delete old XMA cache file while invalidating cache.");
                 }
             }
 
@@ -434,7 +459,7 @@ public class XmaPlugin : BaseModPlugin
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to load XMA cache from file.");
+            LogError(ex, "Failed to load XMA cache from file.");
             return null;
         }
     }
@@ -446,12 +471,11 @@ public class XmaPlugin : BaseModPlugin
             var bytes = MessagePackSerializer.Serialize(data);
             File.WriteAllBytes(_xmaCacheFilePath, bytes);
 
-            Logger.LogDebug("XMA cache saved to {FilePath}, valid until {ExpirationTime}.",
-                _xmaCacheFilePath, data.ExpirationTime.ToString("u"));
+            LogDebug($"XMA cache saved to {_xmaCacheFilePath}, valid until {data.ExpirationTime:u}.");
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to save XMA cache to file.");
+            LogError(ex, "Failed to save XMA cache to file.");
         }
     }
 
@@ -459,5 +483,69 @@ public class XmaPlugin : BaseModPlugin
     {
         _httpClient?.Dispose();
         await base.DisposeAsync();
+    }
+
+    // Logging helper methods with fallback
+    private void LogInfo(string message)
+    {
+        if (Logger != NullLogger.Instance)
+        {
+            Logger.LogInformation(message);
+        }
+        else
+        {
+            Console.WriteLine($"[XMA Plugin] {message}");
+        }
+    }
+
+    private void LogDebug(string message)
+    {
+        if (Logger != NullLogger.Instance)
+        {
+            Logger.LogDebug(message);
+        }
+        else
+        {
+            // Only log debug in debug builds
+            #if DEBUG
+            Console.WriteLine($"[XMA Plugin DEBUG] {message}");
+            #endif
+        }
+    }
+
+    private void LogWarning(string message)
+    {
+        if (Logger != NullLogger.Instance)
+        {
+            Logger.LogWarning(message);
+        }
+        else
+        {
+            Console.WriteLine($"[XMA Plugin WARN] {message}");
+        }
+    }
+
+    private void LogWarning(Exception ex, string message)
+    {
+        if (Logger != NullLogger.Instance)
+        {
+            Logger.LogWarning(ex, message);
+        }
+        else
+        {
+            Console.WriteLine($"[XMA Plugin WARN] {message}: {ex.Message}");
+        }
+    }
+
+    private void LogError(Exception ex, string message)
+    {
+        if (Logger != NullLogger.Instance)
+        {
+            Logger.LogError(ex, message);
+        }
+        else
+        {
+            Console.WriteLine($"[XMA Plugin ERROR] {message}: {ex.Message}");
+        }
     }
 }
