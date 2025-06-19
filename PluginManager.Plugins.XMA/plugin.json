@@ -2,7 +2,7 @@
 {
   "pluginId": "xmamod-plugin",
   "displayName": "XIV Mod Archive",
-  "description": "Official XIV Mod Archive integration - browse and download FFXIV mods",
+  "description": "XIV Mod Archive integration - browse and download FFXIV mods",
   "version": "1.0.1",
   "author": "Council of Tsukuyomi",
   "website": "https://www.xivmodarchive.com",
