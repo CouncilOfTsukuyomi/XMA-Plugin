@@ -27,7 +27,7 @@ public class XmaPlugin : BaseModPlugin
 
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
-    public override string Description => "Official XIV Mod Archive integration - browse and download FFXIV mods";
+    public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
     public override string Version => "1.0.0";
     public override string Author => "Council of Tsukuyomi";
 
