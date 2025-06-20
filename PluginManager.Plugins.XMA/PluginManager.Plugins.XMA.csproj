@@ -6,7 +6,7 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <AssemblyTitle>XmaMod Plugin</AssemblyTitle>
-        <AssemblyDescription>XMA plugin for PMF</AssemblyDescription>
+        <AssemblyDescription>XMA plugin for Atomos</AssemblyDescription>
         <AssemblyCompany>Council of Tsukuyomi</AssemblyCompany>
         <AssemblyProduct>PluginManager XMA Plugin</AssemblyProduct>
         <AssemblyVersion>1.0.2.0</AssemblyVersion>
