@@ -2,7 +2,7 @@
   "pluginId": "xmamod-plugin",
   "displayName": "XIV Mod Archive",
   "description": "XIV Mod Archive integration - browse and download FFXIV mods",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Council of Tsukuyomi",
   "website": "https://www.xivmodarchive.com",
   "repositoryUrl": "https://github.com/CouncilOfTsukuyomi/PluginManager.Plugins.XMA",
@@ -52,12 +52,6 @@
           "title": "Session Cookie",
           "description": "connect.sid cookie value for authenticated access (optional but recommended for full access)"
         },
-        "FetchDownloadLinks": {
-          "type": "boolean",
-          "default": true,
-          "title": "Fetch Download Links",
-          "description": "Whether to fetch direct download links immediately (slower but more complete data)"
-        },
         "RequestDelay": {
           "type": "integer",
           "default": 1000,
@@ -76,9 +70,17 @@
         },
         "UserAgent": {
           "type": "string",
-          "default": "XmaPlugin/1.0.1",
+          "default": "XmaPlugin/1.0.2",
           "title": "User Agent",
           "description": "User agent string for HTTP requests"
+        },
+        "MaxPages": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 10,
+          "title": "Max Pages",
+          "description": "Maximum number of pages to fetch mods from (each page contains ~20 mods)"
         }
       }
     }

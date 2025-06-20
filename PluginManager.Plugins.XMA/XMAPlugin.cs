@@ -17,8 +17,8 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private string? _cookieValue;
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
-    private string _userAgent = "XmaModPlugin/1.0.1";
-    private bool _fetchDownloadLinks = true;
+    private int _maxPages = 2;
+    private string _userAgent = "XmaModPlugin/1.0.2";
 
     // We store the last known cookie to detect changes between calls.
     private string? _lastCookieValue;
@@ -30,7 +30,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
     public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
-    public override string Version => "1.0.1";
+    public override string Version => "1.0.2";
     public override string Author => "Council of Tsukuyomi";
 
     // Simple parameterless constructor for isolated loader
@@ -61,6 +61,8 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     public override async Task InitializeAsync(Dictionary<string, object> configuration)
     {
         LogInfo("Initializing XIV Mod Archive plugin");
+        LogInfo($"Current _maxPages before configuration: {_maxPages}");
+        LogInfo($"Configuration received: {string.Join(", ", configuration.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
 
         // Load configuration
         if (configuration.TryGetValue("BaseUrl", out var baseUrl))
@@ -79,10 +81,28 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
         if (configuration.TryGetValue("UserAgent", out var userAgent))
             _userAgent = userAgent.ToString() ?? _userAgent;
+        
+        if (configuration.TryGetValue("MaxPages", out var maxPages))
+        {
+            LogInfo($"MaxPages found in configuration: value='{maxPages}', type={maxPages?.GetType().Name}");
+            
+            if (int.TryParse(maxPages.ToString(), out var pageCount))
+            {
+                _maxPages = pageCount;
+                LogInfo($"MaxPages setting loaded successfully: {_maxPages}");
+            }
+            else
+            {
+                LogInfo($"MaxPages setting failed to parse: '{maxPages}' - using default: {_maxPages}");
+            }
+        }
+        else
+        {
+            LogInfo($"MaxPages setting not found in configuration, using default: {_maxPages}");
+            LogInfo($"Available configuration keys: {string.Join(", ", configuration.Keys)}");
+        }
 
-        if (configuration.TryGetValue("FetchDownloadLinks", out var fetchLinks) && 
-            bool.TryParse(fetchLinks.ToString(), out var shouldFetch))
-            _fetchDownloadLinks = shouldFetch;
+        LogInfo($"Final _maxPages after configuration: {_maxPages}");
 
         // Set up cache paths
         _xmaCacheFilePath = Path.Combine(PluginDirectory, "xma_mods.cache");
@@ -105,7 +125,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         
         LogInfo("XIV Mod Archive plugin initialized successfully");
     }
-
 
     public override async Task<List<PluginMod>> GetRecentModsAsync()
     {
@@ -149,18 +168,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
         }
         
-        // Optionally fetch download links for each mod
-        if (_fetchDownloadLinks)
+        // Always fetch download links for each mod
+        LogDebug("Enriching mods with download links...");
+        xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
+
+        // Log enriched mods
+        LogDebug($"After enrichment: {xmaMods.Count} mods");
+        foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
         {
-            LogDebug("Enriching mods with download links...");
-            xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
-            
-            // Log enriched mods
-            LogDebug($"After enrichment: {xmaMods.Count} mods");
-            foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
-            {
-                LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
-            }
+            LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
         }
         
         // Cache the XMA-specific results
@@ -203,7 +219,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private async Task<List<XmaMods>> FetchRecentXmaModsAsync()
     {
         var retryCount = 0;
-        
+    
         while (retryCount <= _maxRetries)
         {
             try
@@ -211,12 +227,24 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 if (retryCount > 0)
                     await Task.Delay(_requestDelay * retryCount);
 
-                var page1Results = await ParsePageAsync(1);
-                var page2Results = await ParsePageAsync(2);
+                LogInfo($"About to fetch mods - Current _maxPages value: {_maxPages}");
+                LogInfo($"Fetching mods from {_maxPages} pages");
+
+                var allResults = new List<XmaMods>();
+
+                // Fetch from all configured pages
+                for (int page = 1; page <= _maxPages; page++)
+                {
+                    LogDebug($"Fetching page {page} of {_maxPages}");
+                    var pageResults = await ParsePageAsync(page);
+                    LogDebug($"Page {page} returned {pageResults.Count} mods");
+                    allResults.AddRange(pageResults);
+                }
+
+                LogInfo($"Total mods fetched before deduplication: {allResults.Count}");
 
                 // Combine and deduplicate mods by ImageUrl
-                var distinctMods = page1Results
-                    .Concat(page2Results)
+                var distinctMods = allResults
                     .GroupBy(m => m.ImageUrl)
                     .Select(g => g.First())
                     .ToList();
@@ -235,7 +263,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 }
             }
         }
-
         return new List<XmaMods>();
     }
 
