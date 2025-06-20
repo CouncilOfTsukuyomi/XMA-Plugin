@@ -106,6 +106,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         LogInfo("XIV Mod Archive plugin initialized successfully");
     }
 
+
     public override async Task<List<PluginMod>> GetRecentModsAsync()
     {
         LogDebug("Getting recent mods from XIV Mod Archive");
@@ -118,7 +119,22 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         if (cachedData != null && cachedData.ExpirationTime > DateTimeOffset.Now)
         {
             LogDebug($"Returning {cachedData.Mods.Count} mods from XMA cache");
-            return cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
+            
+            // Log each cached mod before converting
+            foreach (var cachedMod in cachedData.Mods)
+            {
+                LogDebug($"Cached Mod: Name='{cachedMod.Name}', Publisher='{cachedMod.Publisher}', ImageUrl='{cachedMod.ImageUrl}', ModUrl='{cachedMod.ModUrl}', DownloadUrl='{cachedMod.DownloadUrl}'");
+            }
+            
+            var cachedPluginMods = cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
+            
+            // Log each converted PluginMod
+            foreach (var pluginMod in cachedPluginMods)
+            {
+                LogDebug($"PluginMod from cache: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}'");
+            }
+            
+            return cachedPluginMods;
         }
 
         LogDebug("XMA cache is empty or expired. Fetching new data...");
@@ -126,10 +142,25 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         // Fetch fresh data
         var xmaMods = await FetchRecentXmaModsAsync();
         
+        // Log raw XMA mods before enrichment
+        LogDebug($"Fetched {xmaMods.Count} raw XMA mods before enrichment");
+        foreach (var xmaMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+        {
+            LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
+        }
+        
         // Optionally fetch download links for each mod
         if (_fetchDownloadLinks)
         {
+            LogDebug("Enriching mods with download links...");
             xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
+            
+            // Log enriched mods
+            LogDebug($"After enrichment: {xmaMods.Count} mods");
+            foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+            {
+                LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
+            }
         }
         
         // Cache the XMA-specific results
@@ -142,6 +173,13 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
         // Convert to PluginMod format
         var pluginMods = xmaMods.Select(m => m.ToPluginMod(PluginId)).ToList();
+
+        // Log each final PluginMod that will be returned
+        LogInfo($"Final conversion: {pluginMods.Count} PluginMods ready to return");
+        foreach (var pluginMod in pluginMods)
+        {
+            LogInfo($"FINAL PluginMod: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}', PublishedDate='{pluginMod.UploadDate}'");
+        }
 
         LogInfo($"Retrieved {pluginMods.Count} recent mods from XIV Mod Archive");
         return pluginMods;
