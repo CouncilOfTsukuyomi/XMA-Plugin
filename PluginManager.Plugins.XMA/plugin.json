@@ -71,7 +71,7 @@
         },
         "UserAgent": {
           "type": "string",
-          "default": "XmaPlugin/1.0.2",
+          "default": "XmaPlugin/1.0.3",
           "title": "User Agent",
           "description": "User agent string for HTTP requests"
         },
