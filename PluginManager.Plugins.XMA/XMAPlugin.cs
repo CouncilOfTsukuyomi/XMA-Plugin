@@ -1,5 +1,4 @@
-﻿
-using System.Net;
+﻿using System.Net;
 using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
@@ -19,7 +18,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
     private string _userAgent = "XmaModPlugin/1.0.1";
-    private bool _fetchDownloadLinks = true; // Option to fetch download links immediately
+    private bool _fetchDownloadLinks = true;
 
     // We store the last known cookie to detect changes between calls.
     private string? _lastCookieValue;
@@ -34,36 +33,29 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     public override string Version => "1.0.1";
     public override string Author => "Council of Tsukuyomi";
 
-    // Parameterless constructor for plugin loader
-    public XmaPlugin() : base(CreateLogger())
+    // Simple parameterless constructor for isolated loader
+    public XmaPlugin() : base(NullLogger.Instance)
     {
         InitializeHttpClient();
     }
 
-    // Constructor with dependency injection (for testing or manual instantiation)
-    public XmaPlugin(ILogger<XmaPlugin> logger, HttpClient? httpClient = null) 
-        : base(logger, TimeSpan.FromMinutes(30))
+    // Simple constructor with non-generic logger for isolated loader compatibility  
+    public XmaPlugin(ILogger logger) : base(logger, TimeSpan.FromMinutes(30))
     {
-        _httpClient = httpClient ?? new HttpClient();
-        ConfigureHttpClient();
+        InitializeHttpClient();
     }
 
-    private static ILogger CreateLogger()
+    // Constructor for dependency injection (testing/manual use)
+    public XmaPlugin(ILogger logger, HttpClient httpClient) : base(logger, TimeSpan.FromMinutes(30))
     {
-        // This creates a logger that can potentially be replaced by the plugin system
-        return NullLogger.Instance;
+        _httpClient = httpClient;
+        ConfigureHttpClient();
     }
 
     private void InitializeHttpClient()
     {
         _httpClient = new HttpClient();
         ConfigureHttpClient();
-    }
-
-    public void SetLogger(ILogger logger)
-    {
-        // We can't change the Logger property from BaseModPlugin, but we can log this
-        LogInfo("Logger provided to XMA Plugin");
     }
 
     public override async Task InitializeAsync(Dictionary<string, object> configuration)
@@ -482,9 +474,38 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
     public override async ValueTask DisposeAsync()
     {
-        _httpClient?.Dispose();
+        // Call base disposal first to get the logging
         await base.DisposeAsync();
     }
+
+    /// <summary>
+    /// Custom cleanup logic for XMA plugin
+    /// </summary>
+    protected override async Task OnDisposingAsync()
+    {
+        LogInfo("Cleaning up XMA plugin resources...");
+    
+        try
+        {
+            // Dispose HttpClient
+            _httpClient?.Dispose();
+            _httpClient = null;
+        
+            // Clean up any pending requests or other resources
+            LogDebug("HttpClient disposed successfully");
+        
+            // You could also clean up cache files if needed
+            // DeleteCacheFiles();
+        
+            LogInfo("XMA plugin resources cleaned up successfully");
+        }
+        catch (Exception ex)
+        {
+            LogError(ex, "Error during XMA plugin cleanup");
+            throw; // Re-throw to let base class handle it
+        }
+    }
+
 
     // Logging helper methods with fallback
     private void LogInfo(string message)
@@ -507,7 +528,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         }
         else
         {
-            // Only log debug in debug builds
             #if DEBUG
             Console.WriteLine($"[XMA Plugin DEBUG] {message}");
             #endif
