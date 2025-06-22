@@ -1,4 +1,5 @@
-﻿using System.Net;
+﻿
+using System.Net;
 using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
     private int _maxPages = 2;
-    private string _userAgent = "XmaModPlugin/1.0.3";
+    private string _userAgent = "XmaModPlugin/1.0.4";
 
     // We store the last known cookie to detect changes between calls.
     private string? _lastCookieValue;
@@ -30,7 +31,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
     public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
-    public override string Version => "1.0.3";
+    public override string Version => "1.0.4";
     public override string Author => "Council of Tsukuyomi";
 
     // Simple parameterless constructor for isolated loader
@@ -60,6 +61,8 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
     public override async Task InitializeAsync(Dictionary<string, object> configuration)
     {
+        ThrowIfCancellationRequested();
+        
         LogInfo("Initializing XIV Mod Archive plugin");
         LogInfo($"Current _maxPages before configuration: {_maxPages}");
         LogInfo($"Configuration received: {string.Join(", ", configuration.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
@@ -128,77 +131,91 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
     public override async Task<List<PluginMod>> GetRecentModsAsync()
     {
-        LogDebug("Getting recent mods from XIV Mod Archive");
-
-        // Check for cookie changes and invalidate cache if needed
-        InvalidateCacheOnCookieChange();
-
-        // Check XMA-specific cache first
-        var cachedData = LoadXmaCacheFromFile();
-        if (cachedData != null && cachedData.ExpirationTime > DateTimeOffset.Now)
+        try
         {
-            LogDebug($"Returning {cachedData.Mods.Count} mods from XMA cache");
+            ThrowIfCancellationRequested();
             
-            // Log each cached mod before converting
-            foreach (var cachedMod in cachedData.Mods)
+            LogDebug("Getting recent mods from XIV Mod Archive");
+
+            // Check for cookie changes and invalidate cache if needed
+            InvalidateCacheOnCookieChange();
+
+            // Check XMA-specific cache first
+            var cachedData = LoadXmaCacheFromFile();
+            if (cachedData != null && cachedData.ExpirationTime > DateTimeOffset.Now)
             {
-                LogDebug($"Cached Mod: Name='{cachedMod.Name}', Publisher='{cachedMod.Publisher}', ImageUrl='{cachedMod.ImageUrl}', ModUrl='{cachedMod.ModUrl}', DownloadUrl='{cachedMod.DownloadUrl}'");
+                LogDebug($"Returning {cachedData.Mods.Count} mods from XMA cache");
+                
+                // Log each cached mod before converting
+                foreach (var cachedMod in cachedData.Mods)
+                {
+                    LogDebug($"Cached Mod: Name='{cachedMod.Name}', Publisher='{cachedMod.Publisher}', ImageUrl='{cachedMod.ImageUrl}', ModUrl='{cachedMod.ModUrl}', DownloadUrl='{cachedMod.DownloadUrl}'");
+                }
+                
+                var cachedPluginMods = cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
+                
+                // Log each converted PluginMod
+                foreach (var pluginMod in cachedPluginMods)
+                {
+                    LogDebug($"PluginMod from cache: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}'");
+                }
+                
+                return cachedPluginMods;
+            }
+
+            LogDebug("XMA cache is empty or expired. Fetching new data...");
+
+            // Fetch fresh data
+            var xmaMods = await FetchRecentXmaModsAsync();
+            
+            ThrowIfCancellationRequested();
+            
+            // Log raw XMA mods before enrichment
+            LogDebug($"Fetched {xmaMods.Count} raw XMA mods before enrichment");
+            foreach (var xmaMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+            {
+                LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
             }
             
-            var cachedPluginMods = cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
-            
-            // Log each converted PluginMod
-            foreach (var pluginMod in cachedPluginMods)
+            // Always fetch download links for each mod
+            LogDebug("Enriching mods with download links...");
+            xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
+
+            ThrowIfCancellationRequested();
+
+            // Log enriched mods
+            LogDebug($"After enrichment: {xmaMods.Count} mods");
+            foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
             {
-                LogDebug($"PluginMod from cache: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}'");
+                LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
             }
             
-            return cachedPluginMods;
+            // Cache the XMA-specific results
+            var newCache = new XmaCacheData
+            {
+                Mods = xmaMods,
+                ExpirationTime = DateTimeOffset.Now.Add(_xmaCacheDuration)
+            };
+            SaveXmaCacheToFile(newCache);
+
+            // Convert to PluginMod format
+            var pluginMods = xmaMods.Select(m => m.ToPluginMod(PluginId)).ToList();
+
+            // Log each final PluginMod that will be returned
+            LogInfo($"Final conversion: {pluginMods.Count} PluginMods ready to return");
+            foreach (var pluginMod in pluginMods)
+            {
+                LogInfo($"FINAL PluginMod: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}', PublishedDate='{pluginMod.UploadDate}'");
+            }
+
+            LogInfo($"Retrieved {pluginMods.Count} recent mods from XIV Mod Archive");
+            return pluginMods;
         }
-
-        LogDebug("XMA cache is empty or expired. Fetching new data...");
-
-        // Fetch fresh data
-        var xmaMods = await FetchRecentXmaModsAsync();
-        
-        // Log raw XMA mods before enrichment
-        LogDebug($"Fetched {xmaMods.Count} raw XMA mods before enrichment");
-        foreach (var xmaMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+        catch (OperationCanceledException)
         {
-            LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
+            LogInfo("XMA plugin operation was cancelled");
+            return new List<PluginMod>();
         }
-        
-        // Always fetch download links for each mod
-        LogDebug("Enriching mods with download links...");
-        xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
-
-        // Log enriched mods
-        LogDebug($"After enrichment: {xmaMods.Count} mods");
-        foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
-        {
-            LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
-        }
-        
-        // Cache the XMA-specific results
-        var newCache = new XmaCacheData
-        {
-            Mods = xmaMods,
-            ExpirationTime = DateTimeOffset.Now.Add(_xmaCacheDuration)
-        };
-        SaveXmaCacheToFile(newCache);
-
-        // Convert to PluginMod format
-        var pluginMods = xmaMods.Select(m => m.ToPluginMod(PluginId)).ToList();
-
-        // Log each final PluginMod that will be returned
-        LogInfo($"Final conversion: {pluginMods.Count} PluginMods ready to return");
-        foreach (var pluginMod in pluginMods)
-        {
-            LogInfo($"FINAL PluginMod: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}', PublishedDate='{pluginMod.UploadDate}'");
-        }
-
-        LogInfo($"Retrieved {pluginMods.Count} recent mods from XIV Mod Archive");
-        return pluginMods;
     }
 
     private void ConfigureHttpClient()
@@ -224,8 +241,10 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         {
             try
             {
+                ThrowIfCancellationRequested();
+                
                 if (retryCount > 0)
-                    await Task.Delay(_requestDelay * retryCount);
+                    await Task.Delay(_requestDelay * retryCount, CancellationToken);
 
                 LogInfo($"About to fetch mods - Current _maxPages value: {_maxPages}");
                 LogInfo($"Fetching mods from {_maxPages} pages");
@@ -235,6 +254,8 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 // Fetch from all configured pages
                 for (int page = 1; page <= _maxPages; page++)
                 {
+                    ThrowIfCancellationRequested();
+                    
                     LogDebug($"Fetching page {page} of {_maxPages}");
                     var pageResults = await ParsePageAsync(page);
                     LogDebug($"Page {page} returned {pageResults.Count} mods");
@@ -250,6 +271,11 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                     .ToList();
 
                 return distinctMods;
+            }
+            catch (OperationCanceledException)
+            {
+                LogInfo("Fetch operation was cancelled");
+                throw;
             }
             catch (Exception ex)
             {
@@ -277,9 +303,11 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
         var tasks = mods.Select(async mod =>
         {
-            await semaphore.WaitAsync();
+            await semaphore.WaitAsync(CancellationToken);
             try
             {
+                ThrowIfCancellationRequested();
+                
                 var downloadUrl = await GetModDownloadLinkAsync(mod.ModUrl);
                 var enrichedMod = new XmaMods
                 {
@@ -310,13 +338,18 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     {
         try
         {
+            ThrowIfCancellationRequested();
+            
             if (!modUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
                 modUrl = _baseUrl + modUrl;
             }
 
-            await Task.Delay(_requestDelay);
-            var html = await _httpClient!.GetStringAsync(modUrl);
+            await Task.Delay(_requestDelay, CancellationToken);
+            
+            var html = await _httpClient!.GetStringAsync(modUrl, CancellationToken);
+
+            ThrowIfCancellationRequested();
 
             var doc = new HtmlDocument();
             doc.LoadHtml(html);
@@ -354,6 +387,11 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
             return hrefValue;
         }
+        catch (OperationCanceledException)
+        {
+            LogDebug($"Download link parsing was cancelled for: {modUrl}");
+            throw;
+        }
         catch (Exception ex)
         {
             LogError(ex, $"Failed to parse mod download link from: {modUrl}");
@@ -369,8 +407,11 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     {
         var url = $"{_baseUrl}/search?sortby=time_published&sortorder=desc&dt_compat=1&page={pageNumber}";
 
-        await Task.Delay(_requestDelay);
-        var html = await _httpClient!.GetStringAsync(url);
+        await Task.Delay(_requestDelay, CancellationToken);
+        
+        var html = await _httpClient!.GetStringAsync(url, CancellationToken);
+
+        ThrowIfCancellationRequested();
 
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
@@ -388,11 +429,17 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         {
             try
             {
+                ThrowIfCancellationRequested();
+                
                 var mod = ParseModFromCard(modCard);
                 if (mod != null)
                 {
                     results.Add(mod);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -492,7 +539,12 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             {
                 try
                 {
+                    ThrowIfCancellationRequested();
                     File.Delete(_xmaCacheFilePath);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -509,11 +561,18 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     {
         try
         {
+            ThrowIfCancellationRequested();
+            
             if (!File.Exists(_xmaCacheFilePath))
                 return null;
 
             var bytes = File.ReadAllBytes(_xmaCacheFilePath);
             return MessagePackSerializer.Deserialize<XmaCacheData>(bytes);
+        }
+        catch (OperationCanceledException)
+        {
+            LogDebug("Cache loading was cancelled");
+            throw;
         }
         catch (Exception ex)
         {
@@ -526,10 +585,17 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     {
         try
         {
+            ThrowIfCancellationRequested();
+            
             var bytes = MessagePackSerializer.Serialize(data);
             File.WriteAllBytes(_xmaCacheFilePath, bytes);
 
             LogDebug($"XMA cache saved to {_xmaCacheFilePath}, valid until {data.ExpirationTime:u}.");
+        }
+        catch (OperationCanceledException)
+        {
+            LogDebug("Cache saving was cancelled");
+            throw;
         }
         catch (Exception ex)
         {
@@ -570,7 +636,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             throw; // Re-throw to let base class handle it
         }
     }
-
 
     // Logging helper methods with fallback
     private void LogInfo(string message)
