@@ -19,7 +19,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
     private int _maxPages = 2;
-    private string _userAgent = "XmaModPlugin/1.0.4";
+    private string _userAgent = "XmaModPlugin/1.0.5";
 
     // We store the last known cookie to detect changes between calls.
     private string? _lastCookieValue;
@@ -31,7 +31,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
     public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
-    public override string Version => "1.0.4";
+    public override string Version => "1.0.5";
     public override string Author => "Council of Tsukuyomi";
 
     // Simple parameterless constructor for isolated loader
