@@ -82,6 +82,34 @@
           "maximum": 10,
           "title": "Max Pages",
           "description": "Maximum number of pages to fetch mods from (each page contains ~20 mods)"
+        },
+        "CacheDuration": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 5,
+          "maximum": 30,
+          "title": "Cache Duration",
+          "description": "How long the cache should live for (in minutes)"
+        },
+        "ConcurrentDownloadRequests": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 20,
+          "title": "Concurrent Download Requests",
+          "description": "Number of concurrent requests when fetching download links"
+        },
+        "ParallelPageFetching": {
+          "type": "boolean",
+          "default": true,
+          "title": "Parallel Page Fetching",
+          "description": "Fetch multiple pages simultaneously for faster loading"
+        },
+        "ReducedDelayForParallel": {
+          "type": "boolean",
+          "default": true,
+          "title": "Reduced Delay for Parallel Requests",
+          "description": "Use shorter delays when making parallel requests"
         }
       }
     }

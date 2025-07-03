@@ -1,5 +1,4 @@
-﻿
-using System.Net;
+﻿using System.Net;
 using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
@@ -20,13 +19,17 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private int _maxRetries = 3;
     private int _maxPages = 2;
     private string _userAgent = "XmaModPlugin/1.0.6";
+    private int _cacheDuration = 10;
+    private int _concurrentDownloadRequests = 8;
+    private bool _parallelPageFetching = true;
+    private bool _reducedDelayForParallel = true;
 
     // We store the last known cookie to detect changes between calls.
     private string? _lastCookieValue;
 
     // Cache file path specifically for XMA data
     private string _xmaCacheFilePath = string.Empty;
-    private static readonly TimeSpan _xmaCacheDuration = TimeSpan.FromMinutes(30);
+    private static TimeSpan _xmaCacheDuration;
 
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
@@ -64,7 +67,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         ThrowIfCancellationRequested();
         
         LogInfo("Initializing XIV Mod Archive plugin");
-        LogInfo($"Current _maxPages before configuration: {_maxPages}");
         LogInfo($"Configuration received: {string.Join(", ", configuration.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
 
         // Load configuration
@@ -87,28 +89,75 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         
         if (configuration.TryGetValue("MaxPages", out var maxPages))
         {
-            LogInfo($"MaxPages found in configuration: value='{maxPages}', type={maxPages?.GetType().Name}");
-            
             if (int.TryParse(maxPages.ToString(), out var pageCount))
             {
                 _maxPages = pageCount;
-                LogInfo($"MaxPages setting loaded successfully: {_maxPages}");
             }
             else
             {
                 LogInfo($"MaxPages setting failed to parse: '{maxPages}' - using default: {_maxPages}");
             }
         }
-        else
+
+        if (configuration.TryGetValue("CacheDuration", out var cacheDuration))
         {
-            LogInfo($"MaxPages setting not found in configuration, using default: {_maxPages}");
-            LogInfo($"Available configuration keys: {string.Join(", ", configuration.Keys)}");
+            if (int.TryParse(cacheDuration.ToString(), out var cacheDurationMinutes))
+            {
+                _cacheDuration = cacheDurationMinutes;
+                LogInfo($"Cache duration set to {_cacheDuration} minutes");
+            }
+            else
+            {
+                LogWarning($"CacheDuration setting failed to parse: '{cacheDuration}' - using default: {_cacheDuration} minutes");
+            }
+        }
+        
+        if (configuration.TryGetValue("ConcurrentDownloadRequests", out var concurrentRequests))
+        {
+            if (int.TryParse(concurrentRequests.ToString(), out var concurrent))
+            {
+                _concurrentDownloadRequests = concurrent;
+                LogInfo($"Concurrent download requests set to {_concurrentDownloadRequests}");
+            }
+            else
+            {
+                LogWarning($"ConcurrentDownloadRequests setting failed to parse: '{concurrentRequests}' - using default: {_concurrentDownloadRequests}");
+            }
         }
 
-        LogInfo($"Final _maxPages after configuration: {_maxPages}");
+        if (configuration.TryGetValue("ParallelPageFetching", out var parallelPages))
+        {
+            if (bool.TryParse(parallelPages.ToString(), out var parallel))
+            {
+                _parallelPageFetching = parallel;
+                LogInfo($"Parallel page fetching set to {_parallelPageFetching}");
+            }
+            else
+            {
+                LogWarning($"ParallelPageFetching setting failed to parse: '{parallelPages}' - using default: {_parallelPageFetching}");
+            }
+        }
 
+        if (configuration.TryGetValue("ReducedDelayForParallel", out var reducedDelay))
+        {
+            if (bool.TryParse(reducedDelay.ToString(), out var reduced))
+            {
+                _reducedDelayForParallel = reduced;
+                LogInfo($"Reduced delay for parallel requests set to {_reducedDelayForParallel}");
+            }
+            else
+            {
+                LogWarning($"ReducedDelayForParallel setting failed to parse: '{reducedDelay}' - using default: {_reducedDelayForParallel}");
+            }
+        }
+        
         // Set up cache paths
         _xmaCacheFilePath = Path.Combine(PluginDirectory, "xma_mods.cache");
+        // Set up cache duration 
+        _xmaCacheDuration = TimeSpan.FromMinutes(_cacheDuration);
+        
+        LogInfo($"XMA cache duration set to {_xmaCacheDuration.TotalMinutes} minutes");
+        LogInfo($"Performance settings - Concurrent requests: {_concurrentDownloadRequests}, Parallel pages: {_parallelPageFetching}, Reduced delay: {_reducedDelayForParallel}");
         
         // Ensure cache directory exists
         var directory = Path.GetDirectoryName(_xmaCacheFilePath);
@@ -172,7 +221,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             
             // Log raw XMA mods before enrichment
             LogDebug($"Fetched {xmaMods.Count} raw XMA mods before enrichment");
-            foreach (var xmaMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+            foreach (var xmaMod in xmaMods.Take(3))
             {
                 LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
             }
@@ -185,7 +234,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
             // Log enriched mods
             LogDebug($"After enrichment: {xmaMods.Count} mods");
-            foreach (var enrichedMod in xmaMods.Take(3)) // Log first 3 to avoid spam
+            foreach (var enrichedMod in xmaMods.Take(3))
             {
                 LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
             }
@@ -242,24 +291,45 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             try
             {
                 ThrowIfCancellationRequested();
-                
+            
                 if (retryCount > 0)
                     await Task.Delay(_requestDelay * retryCount, CancellationToken);
 
-                LogInfo($"About to fetch mods - Current _maxPages value: {_maxPages}");
-                LogInfo($"Fetching mods from {_maxPages} pages");
+                List<XmaMods> allResults;
 
-                var allResults = new List<XmaMods>();
-
-                // Fetch from all configured pages
-                for (int page = 1; page <= _maxPages; page++)
+                if (_parallelPageFetching && _maxPages > 1)
                 {
-                    ThrowIfCancellationRequested();
-                    
-                    LogDebug($"Fetching page {page} of {_maxPages}");
-                    var pageResults = await ParsePageAsync(page);
-                    LogDebug($"Page {page} returned {pageResults.Count} mods");
-                    allResults.AddRange(pageResults);
+                    LogInfo($"Fetching mods from {_maxPages} pages in parallel");
+
+                    // Fetch all pages in parallel
+                    var pageTasks = Enumerable.Range(1, _maxPages)
+                        .Select(async page =>
+                        {
+                            ThrowIfCancellationRequested();
+                            LogDebug($"Fetching page {page} of {_maxPages}");
+                            var pageResults = await ParsePageAsync(page);
+                            LogDebug($"Page {page} returned {pageResults.Count} mods");
+                            return pageResults;
+                        });
+
+                    var pageResultsArray = await Task.WhenAll(pageTasks);
+                    allResults = pageResultsArray.SelectMany(results => results).ToList();
+                }
+                else
+                {
+                    LogInfo($"Fetching mods from {_maxPages} pages sequentially");
+                    allResults = new List<XmaMods>();
+
+                    // Fetch pages sequentially
+                    for (int page = 1; page <= _maxPages; page++)
+                    {
+                        ThrowIfCancellationRequested();
+                        
+                        LogDebug($"Fetching page {page} of {_maxPages}");
+                        var pageResults = await ParsePageAsync(page);
+                        LogDebug($"Page {page} returned {pageResults.Count} mods");
+                        allResults.AddRange(pageResults);
+                    }
                 }
 
                 LogInfo($"Total mods fetched before deduplication: {allResults.Count}");
@@ -297,9 +367,9 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     /// </summary>
     private async Task<List<XmaMods>> EnrichWithDownloadLinksAsync(List<XmaMods> mods)
     {
-        LogDebug($"Enriching {mods.Count} mods with download links");
+        LogDebug($"Enriching {mods.Count} mods with download links using {_concurrentDownloadRequests} concurrent requests");
         
-        var semaphore = new SemaphoreSlim(3, 3); // Limit concurrent requests
+        var semaphore = new SemaphoreSlim(_concurrentDownloadRequests, _concurrentDownloadRequests);
 
         var tasks = mods.Select(async mod =>
         {
@@ -316,7 +386,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                     Type = mod.Type,
                     ImageUrl = mod.ImageUrl,
                     ModUrl = mod.ModUrl,
-                    DownloadUrl = downloadUrl ?? "", // Set download URL
+                    DownloadUrl = downloadUrl ?? "",
                     Gender = mod.Gender
                 };
                 return enrichedMod;
@@ -344,8 +414,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             {
                 modUrl = _baseUrl + modUrl;
             }
-
-            await Task.Delay(_requestDelay, CancellationToken);
+            
+            if (_reducedDelayForParallel && _concurrentDownloadRequests > 1)
+            {
+                await Task.Delay(_requestDelay / 2, CancellationToken);
+            }
+            else
+            {
+                await Task.Delay(_requestDelay, CancellationToken);
+            }
             
             var html = await _httpClient!.GetStringAsync(modUrl, CancellationToken);
 
@@ -406,8 +483,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private async Task<List<XmaMods>> ParsePageAsync(int pageNumber)
     {
         var url = $"{_baseUrl}/search?sortby=time_published&sortorder=desc&dt_compat=1&page={pageNumber}";
-
-        await Task.Delay(_requestDelay, CancellationToken);
+        
+        if (_reducedDelayForParallel && _parallelPageFetching && _maxPages > 1)
+        {
+            await Task.Delay(_requestDelay / 2, CancellationToken);
+        }
+        else
+        {
+            await Task.Delay(_requestDelay, CancellationToken);
+        }
         
         var html = await _httpClient!.GetStringAsync(url, CancellationToken);
 
@@ -519,7 +603,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             Type = typeText,
             ImageUrl = imgUrl,
             ModUrl = fullLink,
-            DownloadUrl = "", // Will be populated later if FetchDownloadLinks is enabled
+            DownloadUrl = "",
             Gender = genderVal
         };
     }
@@ -553,7 +637,7 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             }
 
             _lastCookieValue = _cookieValue;
-            ConfigureHttpClient(); // Update HttpClient with new cookie
+            ConfigureHttpClient();
         }
     }
 
@@ -619,19 +703,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             // Clean up any pending requests or other resources
             LogDebug("HttpClient disposed successfully");
         
-            // You could also clean up cache files if needed
-            // DeleteCacheFiles();
-        
             LogInfo("XMA plugin resources cleaned up successfully");
         }
         catch (Exception ex)
         {
             LogError(ex, "Error during XMA plugin cleanup");
-            throw; // Re-throw to let base class handle it
+            throw; 
         }
     }
-
-    // Logging helper methods with fallback
+    
     private void LogInfo(string message)
     {
         if (Logger != NullLogger.Instance)
