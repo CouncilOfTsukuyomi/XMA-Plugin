@@ -42,23 +42,16 @@ jobs:
                   # Create plugin directory structure
                   mkdir -p plugin-package
                   
-                  # Publish the plugin with all dependencies
-                  dotnet publish PluginManager.Plugins.XMA \
-                    --configuration Release \
-                    --output plugin-package \
-                    --self-contained false \
-                    --no-restore
+                  # Copy only the main plugin files from build output
+                  cp PluginManager.Plugins.XMA/bin/Release/net9.0/PluginManager.Plugins.XMA.dll plugin-package/
+                  cp PluginManager.Plugins.XMA/bin/Release/net9.0/plugin.json plugin-package/
                   
-                  # Ensure plugin.json is in the output
-                  if [ ! -f "plugin-package/plugin.json" ]; then
-                    cp PluginManager.Plugins.XMA/plugin.json plugin-package/
-                  fi
-                  
-                  # Remove unnecessary files to reduce size
-                  cd plugin-package
-                  rm -f *.pdb *.xml *.deps.json *.runtimeconfig.json
+                  # Verify the main DLL contains embedded dependencies
+                  echo "Plugin package contents:"
+                  ls -la plugin-package/
                   
                   # Create the zip directly from the plugin files
+                  cd plugin-package
                   zip -r ../XMAPlugin-${{ github.ref_name }}.zip .
 
             - name: Create Release
