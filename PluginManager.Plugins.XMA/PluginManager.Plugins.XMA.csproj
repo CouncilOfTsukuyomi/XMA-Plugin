@@ -9,23 +9,17 @@
         <AssemblyDescription>XMA plugin for Atomos</AssemblyDescription>
         <AssemblyCompany>Council of Tsukuyomi</AssemblyCompany>
         <AssemblyProduct>PluginManager XMA Plugin</AssemblyProduct>
-        <AssemblyVersion>1.0.4.0</AssemblyVersion>
-        <FileVersion>1.0.4.0</FileVersion>
-        <InformationalVersion>1.0.4</InformationalVersion>
-
-        <!-- Important: Copy all dependencies to output -->
-        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <AssemblyVersion>1.0.6.0</AssemblyVersion>
+        <FileVersion>1.0.6.0</FileVersion>
+        <InformationalVersion>1.0.6</InformationalVersion>
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- Match the exact versions from PluginManager.Core -->
         <PackageReference Include="HtmlAgilityPack" Version="1.12.1" />
         <PackageReference Include="MessagePack" Version="3.1.4" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0-preview.5.25277.114" />
         <PackageReference Include="System.Text.Json" Version="10.0.0-preview.5.25277.114" />
-
-        <!-- Optional: Add HTTP client support -->
+        
         <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0-preview.5.25277.114" />
     </ItemGroup>
 
@@ -36,10 +30,9 @@
     </ItemGroup>
 
     <ItemGroup>
-        <!-- Reference the core plugin interface -->
         <ProjectReference Include="..\PluginManager\PluginManager.Core\PluginManager.Core.csproj">
-            <Private>true</Private>
+            <Private>false</Private>
+            <ExcludeAssets>runtime</ExcludeAssets>
         </ProjectReference>
     </ItemGroup>
-
 </Project>
