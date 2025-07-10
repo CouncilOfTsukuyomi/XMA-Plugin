@@ -1,4 +1,6 @@
 ﻿using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using HtmlAgilityPack;
 using MessagePack;
 using Microsoft.Extensions.Logging;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using PluginManager.Core.Interfaces;
 using PluginManager.Core.Models;
 using PluginManager.Core.Plugins;
+using PluginManager.Plugins.XMA.Factory;
 using PluginManager.Plugins.XMA.Models;
 
 namespace PluginManager.Plugins.XMA;
@@ -18,48 +21,45 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
     private TimeSpan _requestDelay = TimeSpan.FromMilliseconds(1000);
     private int _maxRetries = 3;
     private int _maxPages = 2;
-    private string _userAgent = "XmaModPlugin/1.0.6";
+    private string _userAgent = "XmaModPlugin/1.0.7";
     private int _cacheDuration = 10;
     private int _concurrentDownloadRequests = 8;
     private bool _parallelPageFetching = true;
     private bool _reducedDelayForParallel = true;
 
-    // We store the last known cookie to detect changes between calls.
-    private string? _lastCookieValue;
+    private List<int> _modTypes = new();
+    private string _sortBy = "time_published";
+    private string _sortOrder = "desc";
+    private int _dtCompatibility = 1;
 
-    // Cache file path specifically for XMA data
+    private List<int> _lastModTypes = new();
+    private string _lastSortBy = "time_published";
+    private string _lastSortOrder = "desc";
+    private int _lastDtCompatibility = 1;
+
+    private string? _lastCookieValue;
+    private string? _lastConfigHash;
+
     private string _xmaCacheFilePath = string.Empty;
     private static TimeSpan _xmaCacheDuration;
 
     public override string PluginId => "xmamod-plugin";
     public override string DisplayName => "XIV Mod Archive";
     public override string Description => "XIV Mod Archive integration - browse and download FFXIV mods";
-    public override string Version => "1.0.6";
+    public override string Version => "1.0.7";
     public override string Author => "Council of Tsukuyomi";
 
-    // Simple parameterless constructor for isolated loader
     public XmaPlugin() : base(NullLogger.Instance)
     {
-        InitializeHttpClient();
     }
 
-    // Simple constructor with non-generic logger for isolated loader compatibility  
     public XmaPlugin(ILogger logger) : base(logger, TimeSpan.FromMinutes(30))
     {
-        InitializeHttpClient();
     }
 
-    // Constructor for dependency injection (testing/manual use)
     public XmaPlugin(ILogger logger, HttpClient httpClient) : base(logger, TimeSpan.FromMinutes(30))
     {
         _httpClient = httpClient;
-        ConfigureHttpClient();
-    }
-
-    private void InitializeHttpClient()
-    {
-        _httpClient = new HttpClient();
-        ConfigureHttpClient();
     }
 
     public override async Task InitializeAsync(Dictionary<string, object> configuration)
@@ -69,7 +69,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         LogInfo("Initializing XIV Mod Archive plugin");
         LogInfo($"Configuration received: {string.Join(", ", configuration.Select(kvp => $"{kvp.Key}={kvp.Value}"))}");
 
-        // Load configuration
         if (configuration.TryGetValue("BaseUrl", out var baseUrl))
             _baseUrl = baseUrl.ToString() ?? _baseUrl;
 
@@ -150,32 +149,192 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 LogWarning($"ReducedDelayForParallel setting failed to parse: '{reducedDelay}' - using default: {_reducedDelayForParallel}");
             }
         }
+
+        if (configuration.TryGetValue("ModTypes", out var modTypes))
+        {
+            LogDebug($"ModTypes raw value: {modTypes} (Type: {modTypes?.GetType().Name})");
+            
+            var parsedTypes = new List<int>();
+            
+            if (modTypes is System.Text.Json.JsonElement jsonElement)
+            {
+                try
+                {
+                    if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        parsedTypes = jsonElement.EnumerateArray()
+                            .Where(element => element.ValueKind == System.Text.Json.JsonValueKind.Number)
+                            .Select(element => element.GetInt32())
+                            .ToList();
+                    }
+                    else if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        parsedTypes.Add(jsonElement.GetInt32());
+                    }
+                    else if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var stringValue = jsonElement.GetString();
+                        if (!string.IsNullOrEmpty(stringValue))
+                        {
+                            parsedTypes = stringValue.Split(',')
+                                .Select(s => s.Trim())
+                                .Where(s => int.TryParse(s, out _))
+                                .Select(int.Parse)
+                                .ToList();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogWarning($"Failed to parse JsonElement ModTypes: {ex.Message}");
+                }
+            }
+            else if (modTypes is IEnumerable<object> typesArray)
+            {
+                parsedTypes = typesArray
+                    .Select(t => t?.ToString())
+                    .Where(t => !string.IsNullOrEmpty(t) && int.TryParse(t, out _))
+                    .Select(int.Parse)
+                    .ToList();
+            }
+            else if (modTypes is string modTypesString)
+            {
+                if (modTypesString.StartsWith("[") && modTypesString.EndsWith("]"))
+                {
+                    try
+                    {
+                        var jsonContent = modTypesString.Trim('[', ']');
+                        var stringTypes = jsonContent.Split(',')
+                            .Select(s => s.Trim().Trim('"'))
+                            .Where(s => !string.IsNullOrEmpty(s));
+                        
+                        parsedTypes = stringTypes
+                            .Where(s => int.TryParse(s, out _))
+                            .Select(int.Parse)
+                            .ToList();
+                    }
+                    catch (Exception ex)
+                    {
+                        LogWarning($"Failed to parse ModTypes JSON array: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    parsedTypes = modTypesString.Split(',')
+                        .Select(s => s.Trim())
+                        .Where(s => int.TryParse(s, out _))
+                        .Select(int.Parse)
+                        .ToList();
+                }
+            }
+            else if (modTypes != null)
+            {
+                var stringValue = modTypes.ToString();
+                if (!string.IsNullOrEmpty(stringValue))
+                {
+                    if (int.TryParse(stringValue, out var singleType))
+                    {
+                        parsedTypes.Add(singleType);
+                    }
+                    else
+                    {
+                        parsedTypes = stringValue.Split(',')
+                            .Select(s => s.Trim())
+                            .Where(s => int.TryParse(s, out _))
+                            .Select(int.Parse)
+                            .ToList();
+                    }
+                }
+            }
+            
+            if (parsedTypes.Any())
+            {
+                _modTypes = parsedTypes;
+                LogInfo($"Mod types filter set to: {string.Join(", ", _modTypes)}");
+            }
+            else
+            {
+                LogInfo("ModTypes could not be parsed or is empty - will fetch all mod types");
+                LogDebug($"ModTypes parsing failed. Original value: '{modTypes}', Type: {modTypes?.GetType().Name}");
+            }
+        }
+
+        if (configuration.TryGetValue("SortBy", out var sortBy))
+        {
+            var sortByString = sortBy.ToString();
+            if (!string.IsNullOrEmpty(sortByString))
+            {
+                var validSortOptions = new[] { "rank", "time_edited", "time_published", "name_slug", "views", "views_today", "downloads", "followers" };
+                if (validSortOptions.Contains(sortByString))
+                {
+                    _sortBy = sortByString;
+                    LogInfo($"Sort by set to: {_sortBy}");
+                }
+                else
+                {
+                    LogWarning($"Invalid SortBy value: '{sortByString}' - using default: {_sortBy}");
+                }
+            }
+        }
+
+        if (configuration.TryGetValue("SortOrder", out var sortOrder))
+        {
+            var sortOrderString = sortOrder.ToString();
+            if (sortOrderString == "asc" || sortOrderString == "desc")
+            {
+                _sortOrder = sortOrderString;
+                LogInfo($"Sort order set to: {_sortOrder}");
+            }
+            else
+            {
+                LogWarning($"Invalid SortOrder value: '{sortOrderString}' - using default: {_sortOrder}");
+            }
+        }
+
+        if (configuration.TryGetValue("DtCompatibility", out var dtCompat))
+        {
+            if (int.TryParse(dtCompat.ToString(), out var dtCompatValue) && dtCompatValue >= 0 && dtCompatValue <= 3)
+            {
+                _dtCompatibility = dtCompatValue;
+                LogInfo($"DT compatibility set to: {_dtCompatibility}");
+            }
+            else
+            {
+                LogWarning($"Invalid DtCompatibility value: '{dtCompat}' - using default: {_dtCompatibility}");
+            }
+        }
         
-        // Set up cache paths
         _xmaCacheFilePath = Path.Combine(PluginDirectory, "xma_mods.cache");
-        // Set up cache duration 
         _xmaCacheDuration = TimeSpan.FromMinutes(_cacheDuration);
         
         LogInfo($"XMA cache duration set to {_xmaCacheDuration.TotalMinutes} minutes");
         LogInfo($"Performance settings - Concurrent requests: {_concurrentDownloadRequests}, Parallel pages: {_parallelPageFetching}, Reduced delay: {_reducedDelayForParallel}");
+        LogInfo($"Filter/Sort settings - Types: [{string.Join(", ", _modTypes)}], Sort: {_sortBy} {_sortOrder}, DT Compat: {_dtCompatibility}");
         
-        // Ensure cache directory exists
         var directory = Path.GetDirectoryName(_xmaCacheFilePath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        // Initialize cookie tracking
+        InvalidateCacheOnFilterSortChange();
+
         _lastCookieValue = _cookieValue;
 
-        // Update cache key if configuration changed
         var configHash = GetConfigurationHash(configuration);
         InvalidateCacheOnConfigChange(configHash);
-
-        ConfigureHttpClient();
+        
+        CreateHttpClient();
         
         LogInfo("XIV Mod Archive plugin initialized successfully");
+    }
+
+    private void CreateHttpClient()
+    {
+        _httpClient?.Dispose();
+        
+        var factory = new XmaHttpClientFactory(_userAgent, _cookieValue, TimeSpan.FromSeconds(30));
+        _httpClient = factory.CreateClient();
     }
 
     public override async Task<List<PluginMod>> GetRecentModsAsync()
@@ -186,16 +345,13 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             
             LogDebug("Getting recent mods from XIV Mod Archive");
 
-            // Check for cookie changes and invalidate cache if needed
             InvalidateCacheOnCookieChange();
 
-            // Check XMA-specific cache first
             var cachedData = LoadXmaCacheFromFile();
             if (cachedData != null && cachedData.ExpirationTime > DateTimeOffset.Now)
             {
                 LogDebug($"Returning {cachedData.Mods.Count} mods from XMA cache");
                 
-                // Log each cached mod before converting
                 foreach (var cachedMod in cachedData.Mods)
                 {
                     LogDebug($"Cached Mod: Name='{cachedMod.Name}', Publisher='{cachedMod.Publisher}', ImageUrl='{cachedMod.ImageUrl}', ModUrl='{cachedMod.ModUrl}', DownloadUrl='{cachedMod.DownloadUrl}'");
@@ -203,7 +359,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 
                 var cachedPluginMods = cachedData.Mods.Select(m => m.ToPluginMod(PluginId)).ToList();
                 
-                // Log each converted PluginMod
                 foreach (var pluginMod in cachedPluginMods)
                 {
                     LogDebug($"PluginMod from cache: ModName='{pluginMod.Name}', Author='{pluginMod.Publisher}', ImageUrl='{pluginMod.ImageUrl}', ModUrl='{pluginMod.ModUrl}', DownloadUrl='{pluginMod.DownloadUrl}', PluginSource='{pluginMod.PluginSource}'");
@@ -214,32 +369,27 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
             LogDebug("XMA cache is empty or expired. Fetching new data...");
 
-            // Fetch fresh data
             var xmaMods = await FetchRecentXmaModsAsync();
             
             ThrowIfCancellationRequested();
             
-            // Log raw XMA mods before enrichment
             LogDebug($"Fetched {xmaMods.Count} raw XMA mods before enrichment");
             foreach (var xmaMod in xmaMods.Take(3))
             {
                 LogDebug($"Raw XMA Mod: Name='{xmaMod.Name}', Publisher='{xmaMod.Publisher}', ImageUrl='{xmaMod.ImageUrl}', ModUrl='{xmaMod.ModUrl}', DownloadUrl='{xmaMod.DownloadUrl}'");
             }
             
-            // Always fetch download links for each mod
             LogDebug("Enriching mods with download links...");
             xmaMods = await EnrichWithDownloadLinksAsync(xmaMods);
 
             ThrowIfCancellationRequested();
 
-            // Log enriched mods
             LogDebug($"After enrichment: {xmaMods.Count} mods");
             foreach (var enrichedMod in xmaMods.Take(3))
             {
                 LogDebug($"Enriched XMA Mod: Name='{enrichedMod.Name}', Publisher='{enrichedMod.Publisher}', ImageUrl='{enrichedMod.ImageUrl}', ModUrl='{enrichedMod.ModUrl}', DownloadUrl='{enrichedMod.DownloadUrl}'");
             }
             
-            // Cache the XMA-specific results
             var newCache = new XmaCacheData
             {
                 Mods = xmaMods,
@@ -247,10 +397,8 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             };
             SaveXmaCacheToFile(newCache);
 
-            // Convert to PluginMod format
             var pluginMods = xmaMods.Select(m => m.ToPluginMod(PluginId)).ToList();
 
-            // Log each final PluginMod that will be returned
             LogInfo($"Final conversion: {pluginMods.Count} PluginMods ready to return");
             foreach (var pluginMod in pluginMods)
             {
@@ -265,21 +413,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             LogInfo("XMA plugin operation was cancelled");
             return new List<PluginMod>();
         }
-    }
-
-    private void ConfigureHttpClient()
-    {
-        if (_httpClient == null) return;
-
-        _httpClient.DefaultRequestHeaders.Clear();
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", _userAgent);
-        
-        if (!string.IsNullOrEmpty(_cookieValue))
-        {
-            _httpClient.DefaultRequestHeaders.Add("Cookie", $"connect.sid={_cookieValue}");
-        }
-
-        _httpClient.Timeout = TimeSpan.FromSeconds(30);
     }
 
     private async Task<List<XmaMods>> FetchRecentXmaModsAsync()
@@ -301,7 +434,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 {
                     LogInfo($"Fetching mods from {_maxPages} pages in parallel");
 
-                    // Fetch all pages in parallel
                     var pageTasks = Enumerable.Range(1, _maxPages)
                         .Select(async page =>
                         {
@@ -320,7 +452,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                     LogInfo($"Fetching mods from {_maxPages} pages sequentially");
                     allResults = new List<XmaMods>();
 
-                    // Fetch pages sequentially
                     for (int page = 1; page <= _maxPages; page++)
                     {
                         ThrowIfCancellationRequested();
@@ -334,7 +465,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
 
                 LogInfo($"Total mods fetched before deduplication: {allResults.Count}");
 
-                // Combine and deduplicate mods by ImageUrl
                 var distinctMods = allResults
                     .GroupBy(m => m.ImageUrl)
                     .Select(g => g.First())
@@ -362,9 +492,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         return new List<XmaMods>();
     }
 
-    /// <summary>
-    /// Enriches mod list with download links by fetching each mod's detail page
-    /// </summary>
     private async Task<List<XmaMods>> EnrichWithDownloadLinksAsync(List<XmaMods> mods)
     {
         LogDebug($"Enriching {mods.Count} mods with download links using {_concurrentDownloadRequests} concurrent requests");
@@ -401,9 +528,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         return results.ToList();
     }
 
-    /// <summary>
-    /// Gets the download link for a specific mod by parsing its detail page
-    /// </summary>
     protected override async Task<string?> GetModDownloadLinkAsync(string modUrl)
     {
         try
@@ -445,19 +569,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
                 return null;
             }
 
-            // Decode HTML entities
             hrefValue = WebUtility.HtmlDecode(hrefValue);
 
-            // If the link is relative, prepend domain
             if (hrefValue.StartsWith("/"))
             {
                 hrefValue = _baseUrl + hrefValue;
             }
 
-            // Unescape percent-encoded sequences
             hrefValue = Uri.UnescapeDataString(hrefValue);
 
-            // Manually encode spaces/apostrophes
             hrefValue = hrefValue
                 .Replace(" ", "%20")
                 .Replace("'", "%27");
@@ -476,13 +596,9 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         }
     }
 
-    /// <summary>
-    /// Parses a single search-results page from XIV Mod Archive.
-    /// Extracts mod name, publisher, type, image URL, direct link, and gender info.
-    /// </summary>
     private async Task<List<XmaMods>> ParsePageAsync(int pageNumber)
     {
-        var url = $"{_baseUrl}/search?sortby=time_published&sortorder=desc&dt_compat=1&page={pageNumber}";
+        var url = BuildSearchUrl(pageNumber);
         
         if (_reducedDelayForParallel && _parallelPageFetching && _maxPages > 1)
         {
@@ -534,14 +650,27 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         return results;
     }
 
+    private string BuildSearchUrl(int pageNumber)
+    {
+        var url = $"{_baseUrl}/search?sortby={_sortBy}&sortorder={_sortOrder}&dt_compat={_dtCompatibility}&page={pageNumber}";
+    
+        if (_modTypes.Count > 0)
+        {
+            var typeParams = string.Join(",", _modTypes);
+            var encodedTypeParams = Uri.EscapeDataString(typeParams);
+            url += $"&types={encodedTypeParams}";
+        }
+    
+        LogDebug($"Built search URL for page {pageNumber}: {url}");
+        return url;
+    }
+
     private XmaMods? ParseModFromCard(HtmlNode modCard)
     {
-        // The detail link is often in <a href="...">
         var linkNode = modCard.SelectSingleNode(".//a[@href]");
         var linkAttr = linkNode?.GetAttributeValue("href", "") ?? "";
         var fullLink = string.IsNullOrWhiteSpace(linkAttr) ? "" : _baseUrl + linkAttr;
 
-        // Name in <h5 class="card-title">
         var nameNode = modCard.SelectSingleNode(".//h5[contains(@class,'card-title')]");
         var rawName = nameNode?.InnerText?.Trim() ?? "";
         var normalizedName = NormalizeModName(rawName);
@@ -549,11 +678,9 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         if (string.IsNullOrEmpty(normalizedName))
             return null;
 
-        // Publisher text in <p class="card-text mx-2"> or similar
         var publisherNode = modCard.SelectSingleNode(".//p[contains(@class,'card-text')]/a[@href]");
         var publisherText = publisherNode?.InnerText?.Trim() ?? "";
 
-        // Type/genders in <code class="text-light">
         var infoNodes = modCard.SelectNodes(".//code[contains(@class, 'text-light')]");
         var typeText = "";
         var genderText = "";
@@ -574,7 +701,6 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             }
         }
 
-        // Convert to enum
         var genderVal = XmaGender.Unisex;
         if (string.Equals(genderText, "male", StringComparison.OrdinalIgnoreCase))
         {
@@ -585,11 +711,9 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             genderVal = XmaGender.Female;
         }
 
-        // The image is in 'card-img-top' <img>
         var imgNode = modCard.SelectSingleNode(".//img[contains(@class, 'card-img-top')]");
         var imgUrl = imgNode?.GetAttributeValue("src", "") ?? "";
 
-        // Skip mods without an image
         if (string.IsNullOrWhiteSpace(imgUrl))
         {
             LogWarning($"Skipping mod due to missing image URL, Name={normalizedName}");
@@ -608,17 +732,12 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         };
     }
 
-    /// <summary>
-    /// Deletes the existing mod cache file if the connect.sid cookie has changed.
-    /// Then updates _lastCookieValue to the current cookie.
-    /// </summary>
     private void InvalidateCacheOnCookieChange()
     {
         if (_cookieValue != _lastCookieValue)
         {
             LogDebug("Cookie changed. Invalidating cached data.");
 
-            // Remove XMA-specific cache file
             if (File.Exists(_xmaCacheFilePath))
             {
                 try
@@ -637,8 +756,98 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
             }
 
             _lastCookieValue = _cookieValue;
-            ConfigureHttpClient();
+            // Recreate HttpClient with new cookie
+            CreateHttpClient();
         }
+    }
+
+    private void InvalidateCacheOnFilterSortChange()
+    {
+        var modTypesChanged = !_modTypes.SequenceEqual(_lastModTypes);
+        var sortByChanged = _sortBy != _lastSortBy;
+        var sortOrderChanged = _sortOrder != _lastSortOrder;
+        var dtCompatChanged = _dtCompatibility != _lastDtCompatibility;
+
+        if (modTypesChanged || sortByChanged || sortOrderChanged || dtCompatChanged)
+        {
+            LogDebug("Filter/sort configuration changed. Invalidating cached data.");
+            
+            if (modTypesChanged)
+                LogDebug($"ModTypes changed from [{string.Join(", ", _lastModTypes)}] to [{string.Join(", ", _modTypes)}]");
+            if (sortByChanged)
+                LogDebug($"SortBy changed from '{_lastSortBy}' to '{_sortBy}'");
+            if (sortOrderChanged)
+                LogDebug($"SortOrder changed from '{_lastSortOrder}' to '{_sortOrder}'");
+            if (dtCompatChanged)
+                LogDebug($"DtCompatibility changed from {_lastDtCompatibility} to {_dtCompatibility}");
+
+            if (File.Exists(_xmaCacheFilePath))
+            {
+                try
+                {
+                    ThrowIfCancellationRequested();
+                    File.Delete(_xmaCacheFilePath);
+                    LogDebug("XMA cache file deleted due to filter/sort changes");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex, "Failed to delete old XMA cache file while invalidating due to filter/sort changes.");
+                }
+            }
+
+            _lastModTypes = new List<int>(_modTypes);
+            _lastSortBy = _sortBy;
+            _lastSortOrder = _sortOrder;
+            _lastDtCompatibility = _dtCompatibility;
+        }
+    }
+
+    protected override string GetConfigurationHash(Dictionary<string, object> configuration)
+    {
+        var configString = string.Join("|", configuration.OrderBy(kvp => kvp.Key).Select(kvp => $"{kvp.Key}={kvp.Value}"));
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(configString));
+        return Convert.ToBase64String(hash);
+    }
+
+    protected override void InvalidateCacheOnConfigChange(string configHash)
+    {
+        if (_lastConfigHash != null && _lastConfigHash != configHash)
+        {
+            LogDebug("Configuration changed. Invalidating cached data.");
+
+            if (File.Exists(_xmaCacheFilePath))
+            {
+                try
+                {
+                    ThrowIfCancellationRequested();
+                    File.Delete(_xmaCacheFilePath);
+                    LogDebug("XMA cache file deleted due to configuration changes");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogError(ex, "Failed to delete old XMA cache file while invalidating due to configuration changes.");
+                }
+            }
+        }
+
+        _lastConfigHash = configHash;
+    }
+
+    protected override string NormalizeModName(string rawName)
+    {
+        if (string.IsNullOrWhiteSpace(rawName))
+            return string.Empty;
+
+        return WebUtility.HtmlDecode(rawName.Trim());
     }
 
     private XmaCacheData? LoadXmaCacheFromFile()
@@ -687,20 +896,15 @@ public class XmaPlugin : BaseModPlugin, IModPlugin
         }
     }
 
-    /// <summary>
-    /// Custom cleanup logic for XMA plugin
-    /// </summary>
     protected override async Task OnDisposingAsync()
     {
         LogInfo("Cleaning up XMA plugin resources...");
     
         try
         {
-            // Dispose HttpClient
             _httpClient?.Dispose();
             _httpClient = null;
         
-            // Clean up any pending requests or other resources
             LogDebug("HttpClient disposed successfully");
         
             LogInfo("XMA plugin resources cleaned up successfully");

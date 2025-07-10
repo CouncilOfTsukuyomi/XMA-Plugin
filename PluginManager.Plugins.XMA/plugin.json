@@ -2,7 +2,7 @@
   "pluginId": "xmamod-plugin",
   "displayName": "XIV Mod Archive",
   "description": "XIV Mod Archive integration - browse and download FFXIV mods",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "author": "Council of Tsukuyomi",
   "website": "https://www.xivmodarchive.com",
   "repositoryUrl": "https://github.com/CouncilOfTsukuyomi/PluginManager.Plugins.XMA",
@@ -71,7 +71,7 @@
         },
         "UserAgent": {
           "type": "string",
-          "default": "XmaPlugin/1.0.6",
+          "default": "XmaPlugin/1.0.7",
           "title": "User Agent",
           "description": "User agent string for HTTP requests"
         },
@@ -110,6 +110,76 @@
           "default": true,
           "title": "Reduced Delay for Parallel Requests",
           "description": "Use shorter delays when making parallel requests"
+        },
+        "ModTypes": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "enum": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16],
+            "enumTitles": ["Gear", "Body", "Face", "Hair", "Reshade", "Other", "Minion", "Mount", "Furniture", "Skin", "Racial Scaling", "Pose", "VFX", "Animation", "Sound"]
+          },
+          "default": [],
+          "title": "Mod Types",
+          "description": "Select which mod types to include (leave empty for all types)",
+          "uniqueItems": true
+        },
+        "SortBy": {
+          "type": "string",
+          "default": "time_published",
+          "title": "Sort By",
+          "description": "How to sort the results",
+          "enum": [
+            "rank",
+            "time_edited",
+            "time_published",
+            "name_slug",
+            "views",
+            "views_today",
+            "downloads",
+            "followers"
+          ],
+          "enumTitles": [
+            "Relevance",
+            "Last Version Update",
+            "Release Date",
+            "Name",
+            "Views",
+            "Views Today",
+            "Downloads",
+            "Followers"
+          ]
+        },
+        "SortOrder": {
+          "type": "string",
+          "default": "desc",
+          "title": "Sort Order",
+          "description": "Sort order for results",
+          "enum": [
+            "desc",
+            "asc"
+          ],
+          "enumTitles": [
+            "Descending (Highest First)",
+            "Ascending (Lowest First)"
+          ]
+        },
+        "DtCompatibility": {
+          "type": "integer",
+          "default": 1,
+          "title": "Dawntrail Compatibility",
+          "description": "Filter by Dawntrail compatibility level",
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "enumTitles": [
+            "Fully Compatible",
+            "Compatible via TexTools",
+            "Partially Compatible",
+            "Not Compatible"
+          ]
         }
       }
     }
