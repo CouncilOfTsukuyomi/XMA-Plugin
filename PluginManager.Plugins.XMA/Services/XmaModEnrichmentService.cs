@@ -20,7 +20,7 @@ public class XmaModEnrichmentService
 
     public async Task<List<XmaMods>> EnrichWithDownloadLinksAsync(List<XmaMods> mods)
     {
-        _logger.LogDebug($"Enriching {mods.Count} mods with download links using {_configService.ConcurrentDownloadRequests} concurrent requests");
+        _logger.LogDebug($"Enriching {mods.Count} mods with download links, tags, versions, and update dates using {_configService.ConcurrentDownloadRequests} concurrent requests");
 
         var semaphore = new SemaphoreSlim(_configService.ConcurrentDownloadRequests, _configService.ConcurrentDownloadRequests);
 
@@ -31,7 +31,8 @@ public class XmaModEnrichmentService
             {
                 _cancellationToken.ThrowIfCancellationRequested();
 
-                var downloadUrl = await _webScrapingService.GetModDownloadLinkAsync(mod.ModUrl);
+                var (downloadLink, tags, lastVersionUpdate, version) = await _webScrapingService.GetModDetailsAsync(mod.ModUrl);
+                
                 return new XmaMods
                 {
                     Name = mod.Name,
@@ -39,8 +40,11 @@ public class XmaModEnrichmentService
                     Type = mod.Type,
                     ImageUrl = mod.ImageUrl,
                     ModUrl = mod.ModUrl,
-                    DownloadUrl = downloadUrl ?? "",
-                    Gender = mod.Gender
+                    DownloadUrl = downloadLink ?? "",
+                    Gender = mod.Gender,
+                    Tags = tags,
+                    LastVersionUpdate = lastVersionUpdate,
+                    Version = version
                 };
             }
             finally

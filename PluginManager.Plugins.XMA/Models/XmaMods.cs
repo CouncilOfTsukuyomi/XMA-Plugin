@@ -27,6 +27,15 @@ public class XmaMods
     [Key(6)]
     public XmaGender Gender { get; set; } = XmaGender.Unisex;
 
+    [Key(7)]
+    public List<string> Tags { get; set; } = new();
+
+    [Key(8)]
+    public DateTime? LastVersionUpdate { get; set; }
+
+    [Key(9)]
+    public string Version { get; set; } = string.Empty;
+
     /// <summary>
     /// Convert to PluginMod for the plugin manager
     /// </summary>
@@ -41,8 +50,9 @@ public class XmaMods
             Publisher = Publisher,
             Type = Type,
             PluginSource = pluginSource,
-            UploadDate = DateTime.UtcNow, // TODO:
-            Version = "1.0" // TODO:
+            UploadDate = LastVersionUpdate ?? DateTime.UtcNow,
+            Version = Version,
+            Tags = Tags
         };
     }
 }

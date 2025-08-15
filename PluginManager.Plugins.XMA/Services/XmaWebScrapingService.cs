@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using PluginManager.Plugins.XMA.Models;
 using System.Net;
+using System.Globalization;
 
 namespace PluginManager.Plugins.XMA.Services;
 
@@ -318,6 +319,185 @@ public class XmaWebScrapingService
         {
             _logger.LogError(ex, $"Failed to parse mod download link from: {modUrl}");
             return null;
+        }
+    }
+    
+    public async Task<(string? downloadLink, List<string> tags, DateTime? lastVersionUpdate, string version)> GetModDetailsAsync(string modUrl)
+    {
+        try
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+
+            if (!modUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                modUrl = _configService.BaseUrl + modUrl;
+            }
+
+            if (_configService is {ReducedDelayForParallel: true, ConcurrentDownloadRequests: > 1})
+            {
+                await Task.Delay(_configService.RequestDelay / 2, _cancellationToken);
+            }
+            else
+            {
+                await Task.Delay(_configService.RequestDelay, _cancellationToken);
+            }
+
+            var html = await _httpClient.GetStringAsync(modUrl, _cancellationToken);
+
+            _cancellationToken.ThrowIfCancellationRequested();
+
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+            
+            string? downloadLink = null;
+            var downloadNode = doc.DocumentNode.SelectSingleNode("//a[@id='mod-download-link']");
+            if (downloadNode != null)
+            {
+                var hrefValue = downloadNode.GetAttributeValue("href", "");
+                if (!string.IsNullOrWhiteSpace(hrefValue))
+                {
+                    hrefValue = WebUtility.HtmlDecode(hrefValue);
+
+                    if (hrefValue.StartsWith("/"))
+                    {
+                        hrefValue = _configService.BaseUrl + hrefValue;
+                    }
+
+                    hrefValue = Uri.UnescapeDataString(hrefValue);
+                    hrefValue = hrefValue
+                        .Replace(" ", "%20")
+                        .Replace("'", "%27");
+
+                    downloadLink = hrefValue;
+                }
+            }
+            
+            var version = "";
+            var versionNode = doc.DocumentNode.SelectSingleNode("//code[@class='text-light' and contains(text(), 'Version:')]");
+            if (versionNode != null)
+            {
+                var versionText = versionNode.InnerText?.Trim();
+                if (!string.IsNullOrWhiteSpace(versionText))
+                {
+                    var versionMatch = versionText.Replace("Version:", "").Trim();
+                    if (!string.IsNullOrWhiteSpace(versionMatch))
+                    {
+                        version = versionMatch;
+                    }
+                }
+            }
+            
+            var tags = new List<string>();
+            _logger.LogDebug($"Attempting to parse tags for mod: {modUrl}");
+            
+            var tagsDivs = doc.DocumentNode.SelectNodes("//div[contains(@class, 'mod-meta-block') and contains(normalize-space(text()), 'Tags :')]");
+            _logger.LogDebug($"Found {tagsDivs?.Count ?? 0} potential tags divs");
+            
+            if (tagsDivs != null)
+            {
+                foreach (var tagsDiv in tagsDivs)
+                {
+                    _logger.LogDebug($"Tags div HTML: {tagsDiv.OuterHtml}");
+                    
+                    var tagLinksInDiv = tagsDiv.SelectNodes(".//a[starts-with(@href, '/search?tags=')]");
+                    if (tagLinksInDiv == null) continue;
+                    _logger.LogDebug($"Found {tagLinksInDiv.Count} tag links in this div");
+                        
+                    foreach (var tagLink in tagLinksInDiv)
+                    {
+                        var tagText = tagLink.InnerText?.Trim();
+                        var href = tagLink.GetAttributeValue("href", "");
+                            
+                        _logger.LogDebug($"Tag link - Text: '{tagText}', Href: '{href}'");
+                            
+                        if (!string.IsNullOrWhiteSpace(tagText))
+                        {
+                            tags.Add(tagText);
+                        }
+                    }
+                    break;
+                }
+            }
+            
+            if (tags.Count == 0)
+            {
+                _logger.LogDebug("No tags found with primary approach, trying broader search");
+                
+                var allTagLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/search?tags=')]");
+                if (allTagLinks != null)
+                {
+                    _logger.LogDebug($"Found {allTagLinks.Count} potential tag links across the entire page");
+                    
+                    foreach (var tagLink in allTagLinks)
+                    {
+                        var isInMetadataArea = tagLink.Ancestors("div")
+                            .Any(div => div.GetAttributeValue("class", "").Contains("mod-meta-block"));
+                        
+                        if (isInMetadataArea)
+                        {
+                            var tagText = tagLink.InnerText?.Trim();
+                            var href = tagLink.GetAttributeValue("href", "");
+                            
+                            _logger.LogDebug($"Metadata area tag link - Text: '{tagText}', Href: '{href}'");
+                            
+                            if (!string.IsNullOrWhiteSpace(tagText))
+                            {
+                                tags.Add(tagText);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            _logger.LogDebug($"Final parsed tags count: {tags.Count}, Tags: [{string.Join(", ", tags)}]");
+            
+            // Parse last version update and convert to local time
+            DateTime? lastVersionUpdate = null;
+            var lastUpdateSection = doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'mod-meta-block') and contains(text(), 'Last Version Update :')]//code[@class='text-light server-date']");
+            
+            if (lastUpdateSection != null)
+            {
+                var dateText = lastUpdateSection.InnerText?.Trim();
+                if (!string.IsNullOrWhiteSpace(dateText))
+                {
+                    _logger.LogDebug($"Parsing date text: '{dateText}'");
+                    // Parse the date format: "Thu Aug 14 2025 12:02:05 GMT+0000 (Coordinated Universal Time)"
+                    if (DateTime.TryParse(dateText, null, DateTimeStyles.RoundtripKind, out var parsedDate))
+                    {
+                        if (parsedDate.Kind == DateTimeKind.Utc)
+                        {
+                            lastVersionUpdate = parsedDate.ToLocalTime();
+                        }
+                        else
+                        {
+                            lastVersionUpdate = DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc).ToLocalTime();
+                        }
+                        _logger.LogDebug($"Parsed and converted date to local time: {lastVersionUpdate}");
+                    }
+                    else
+                    {
+                        _logger.LogWarning($"Failed to parse last version update date: {dateText} for mod: {modUrl}");
+                    }
+                }
+            }
+            else
+            {
+                _logger.LogDebug("No last version update section found");
+            }
+
+            _logger.LogDebug($"GetModDetailsAsync completed - Download: {downloadLink != null}, Tags: {tags.Count}, Date: {lastVersionUpdate != null}, Version: '{version}'");
+
+            return (downloadLink, tags, lastVersionUpdate, version);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug($"Mod details parsing was cancelled for: {modUrl}");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Failed to parse mod details from: {modUrl}");
+            return (null, new List<string>(), null, "");
         }
     }
 }
